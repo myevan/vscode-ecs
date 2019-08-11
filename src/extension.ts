@@ -184,11 +184,15 @@ class Shape {
 }
 
 class Component {
-	static getCode():number {
-		return 0;
+	static code = 0;
+	static setCode(code:number) {
+		Component.code = code;
+	}
+	static getCode() {
+		return Component.code;
 	}
 	getCode():number {
-		return Component.getCode();
+		return Component.code;
 	}
 }
 
@@ -280,16 +284,95 @@ class System {
 	}
 }
 
+class ComponentPool {
+	allocs:Component[];
+	totals:Component[];
+	frees:number[];
+	checks:number[];
+	capIdx:number;
+	capSeq:number;
+	nextSeq:number;
+	baseSeq:number;
+
+	constructor(type:typeof Component, code:number, cap:number) {
+		let allocs = new Array();
+		let totals = new Array(cap);
+		let frees = new Array(cap);
+		let checks = new Array(cap);
+		for (let i = 0; i < cap; ++i) {
+			let inst = new type();
+			totals[i] = inst;
+			frees[i] = i;
+			checks[i] = 0;
+		}
+		this.totals = totals;
+		this.frees = frees;
+		this.checks = checks;
+		this.allocs = allocs;
+		this.capIdx = cap;
+		this.capSeq  = 100;
+		this.nextSeq = 1;
+		this.baseSeq = code * this.capSeq * 10;
+	}
+
+	alloc():number {
+		let freeIdx = this.frees.pop();
+		if (!freeIdx) { return 0; }
+
+		let freeInst = this.totals[freeIdx];
+		let allocIdx = this.alloc.length;
+		this.allocs.push(freeInst);
+		let check = this.baseSeq + this.nextSeq;
+		this.nextSeq += 2;
+		this.nextSeq %= this.capSeq;
+		this.checks[freeIdx] = check;
+		return (check * this.capIdx + allocIdx) * this.capIdx + freeIdx;
+	}
+
+	free(handle:number):boolean {
+		let freeIdx = handle % this.capIdx;
+		let head = ~~(handle / this.capIdx); 
+		let allocIdx = head % this.capIdx;
+		let check = ~~(head / this.capIdx);
+		if (check !== this.checks[freeIdx]) { return false; }
+		this.frees.push(freeIdx);
+		this.allocs.splice(allocIdx, 1);
+		return true;
+	}
+
+	get(handle:number):Component|undefined {
+		let freeIdx = handle % this.capIdx;
+		let head = ~~(handle / this.capIdx); 
+		let allocIdx = head % this.capIdx;
+		let check = ~~(head / this.capIdx);
+		if (check !== this.checks[freeIdx]) { return undefined; }
+		return this.allocs[allocIdx];
+	}
+
+	gets():Component[] {
+		return this.allocs;
+	}
+}
+
 class World implements IWorld {
 	nextId = 1;
 	systems:System[];
+	compPools:ComponentPool[];
 	compStorage:ComponentStorage;
 	entityMap:Map<number, Entity>;
 
 	constructor(compFactory:ComponentFactory) {
 		this.systems = [];
+		this.compPools = new Array();
 		this.compStorage = new ComponentStorage(compFactory);
 		this.entityMap = new Map<number, Entity>();
+	}
+
+	addComponentPool(compType:typeof Component, cap:number) {
+		let compCode = this.compPools.length;
+		let compPool = new ComponentPool(compType, compCode, cap);
+		this.compPools.push(compPool);
+		compType.setCode(compCode);
 	}
 
 	getComponents(compType:typeof Component):Component[]|undefined {
@@ -333,6 +416,8 @@ class World implements IWorld {
 }
 
 class Actor extends Component {
+	static code = 0;
+
 	pos:Position;
 	shape:Shape;
 
@@ -342,12 +427,12 @@ class Actor extends Component {
 		this.shape = new Shape('@');
 	}
 
-	static getCode():number {
-		return 1;
+	static setCode(code:number) {
+		Actor.code = code;
 	}
 
 	getCode():number {
-		return Actor.getCode();
+		return Actor.code;
 	}
 }
 
@@ -372,6 +457,7 @@ class ExampleApplication extends Application {
 		compFactory.registerComponentType(Actor);
 
 		let world = new World(compFactory);
+		world.addComponentPool(Actor, 1000);
 		world.addSystem(new TextRenderSystem(world));
 		let newEntity = world.spawnEntity([Actor]);
 	}
